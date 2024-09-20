@@ -7,9 +7,14 @@
 
     SECTION TEXT
 
+    DEFC SCROLL_SCREEN = 1
+    DEFC BIT_PER_COLOR = 8
     DEFC SCREEN_WIDTH  = 64
     DEFC SCREEN_HEIGHT = 32
-    DEFC SCREEN_BORDERS = 0
+    DEFC SCREEN_BORDERS = 1
+
+    DEFC FRONT_COLOR  = 0x3
+    DEFC BORDER_COLOR = 0x13
 
     MACRO ADD_HL_A _
         add l
@@ -31,8 +36,8 @@
     ;   None
     PUBLIC screen_init
 screen_init:
-    ; Since we don't need two layers and 2 colors are enough, switch to 640x480 4-bit mode
-    ld a, VID_MODE_GFX_640_4BIT
+    ; We need two layers, use 640x480 8-bit mode
+    ld a, VID_MODE_GFX_640_8BIT
     out (IO_CTRL_VID_MODE), a
     ; Map the tileset in page 2
     ld de, 0x8000
@@ -54,73 +59,99 @@ _screen_init_loop:
     ; Top-right: bit 2
     ; Bottom-left: bit 1
     ; Bottom-right: bit 0
-    ; If bit 3 is 1, store 0xff in D, else store 0 in D
-    ; If bit 2 is 1, store 0xff in E, else store 0 in E
-    ; If bit 1 is 1, store 0xff in B, else store 0 in B
-    ; If bit 0 is 1, store 0xff in C, else store 0 in C
+    ; If bit 3 is 1, store FRONT_COLOR in D, else store 0 in D
+    ; If bit 2 is 1, store FRONT_COLOR in E, else store 0 in E
+    ; If bit 1 is 1, store FRONT_COLOR in B, else store 0 in B
+    ; If bit 0 is 1, store FRONT_COLOR in C, else store 0 in C
     rrca
     jr nc, _screen_init_skip_bit0
-    dec c   ; Set C to 0xFF
+    ld c, FRONT_COLOR
 _screen_init_skip_bit0:
     rrca
     jr nc, _screen_init_skip_bit1
-    dec b
+    ld b, FRONT_COLOR
 _screen_init_skip_bit1:
     rrca
     jr nc, _screen_init_skip_bit2
-    dec e
+    ld e, FRONT_COLOR
 _screen_init_skip_bit2:
     rrca
     jr nc, _screen_init_skip_bit3
-    dec d
+    ld d, FRONT_COLOR
 _screen_init_skip_bit3:
     call write_tile
     pop bc
     djnz _screen_init_loop
-  IF SCREEN_BORDERS
-    ; Generate a grey tile (color 0x7) as tile 16
-    ld bc, 128
-    ld e, 0x77
-    call vramset
-  ENDIF
 
-  IF SCROLL_SCREEN
+    ; Generate a transparent tile as tile 16
+    ld bc, 32 * BIT_PER_COLOR
+    push bc
+    ld e, 0
+    call vramset
+    ; Generate a grey tile (color 0x7) as tile 17
+    pop bc
+    ld e, BORDER_COLOR
+    call vramset
+
     ; Scroll left the screen, so that the virtual screen is in the middle
-    ; Scroll left   4 tiles (640 - 4*16 = 640 - 64  = 576px)
-    ; Scroll bottom 7 tiles (480 - 7*16 = 480 - 112 = 368px)
-    ld a, 576 & 0xff
-    out (IO_CTRL_L0_SCR_X_LOW), a
-    ld a, 576 >> 8
-    out (IO_CTRL_L0_SCR_X_HIGH), a
-    ld a, 368 & 0xff
-    out (IO_CTRL_L0_SCR_Y_LOW), a
-    ld a, 368 >> 8
-    out (IO_CTRL_L0_SCR_Y_HIGH), a
-  ENDIF
+    ; Scroll left   4 tiles (1280 - 4*16 = 1280 - 64  = 1216px)
+    ; Scroll bottom 7 tiles (640 - 7*16 = 640 - 112 = 528px)
+    ; DEFC SCROLL_X = 16
+    ; DEFC SCROLL_Y = 640 - 112
+    ; ld a, SCROLL_X & 0xff
+    ; out (IO_CTRL_L0_SCR_X_LOW), a
+    ; ld a, SCROLL_X >> 8
+    ; out (IO_CTRL_L0_SCR_X_HIGH), a
+    ; ld a, SCROLL_Y & 0xff
+    ; out (IO_CTRL_L0_SCR_Y_LOW), a
+    ; ld a, SCROLL_Y >> 8
+    ; out (IO_CTRL_L0_SCR_Y_HIGH), a
+    ; ld a, SCROLL_X & 0xff
+    ; out (IO_CTRL_L1_SCR_X_LOW), a
+    ; ld a, SCROLL_X >> 8
+    ; out (IO_CTRL_L1_SCR_X_HIGH), a
+    ; ld a, SCROLL_Y & 0xff
+    ; out (IO_CTRL_L1_SCR_Y_LOW), a
+    ; ld a, SCROLL_Y >> 8
+    ; out (IO_CTRL_L1_SCR_Y_HIGH), a
 
     ; Use page 1 for this code, page 2 for the vram and page 3 for the stack and data
     ld de, 0x8000
     ld bc, VID_MEM_PHYS_ADDR_START & 0xffff
     ld h, VID_MEM_PHYS_ADDR_START >> 16
     MAP()
-    ; Clear the tilemap by showing tile 0 everywhere
-    ld hl, 0x8000 + VID_MEM_LAYER0_OFFSET
-    ld bc, 80*40
-  IF SCREEN_BORDERS
-    ld e, 0x10
-  ELSE
-    ld e, 0
-  ENDIF
-    call vramset
-    ; Similarly for the layer 1
+
+    ; The emulated screen will take 32x16 tiles, make these tiles transparent on the layer 1
+    ; the rest of the tiles must be set to 16 (grey tile)
     ld hl, 0x8000 + VID_MEM_LAYER1_OFFSET
-    ld bc, 80*40
-  IF SCREEN_BORDERS
-    ld e, 0x10
-  ELSE
-    ld e, 0
-  ENDIF
+    ; Set B tiles of value D and C tiles of value E, do that on A lines
+    ld a, 16
+    ; 16 is transparent, 17 is border
+    ld de, 0x1011
+    ; 32 tiles of D, 48 tiles of E
+    ld bc, 0x2030
+_screen_init_border_loop:
+    push bc
+_screen_init_border_D_loop:
+    ld (hl), d
+    inc hl
+    djnz _screen_init_border_D_loop
+    ld b, c
+_screen_init_border_E_loop:
+    ld (hl), e
+    inc hl
+    djnz _screen_init_border_E_loop
+    pop bc
+    dec a
+    jp nz, _screen_init_border_loop
+
+    ; Initialize the rest of the lines (40 - 16 = 24)
+    ld bc, 24*80
+    ld e, 17    ; border tile
     call vramset
+
+    ; Fall-through
+
 clear_virtual_screen:
     ; Set the top-left rectangle (32*16 tiles) to tile 0
     ld hl, 0x8000 + VID_MEM_LAYER0_OFFSET
@@ -150,47 +181,31 @@ _screen_init_width_loop:
     ;   HL - Tile address
     ;   DEBC - Pixel data
 write_tile:
-    ; In 4-bit mode, each pixel is one nibble, so 8 pixels take 4 bytes
+    ; In 8-bit mode, each pixel is one byte, so 8 pixels take 8 bytes
     ; Generate 8 lines
     ld a, 8
 _write_tile_top_lines:
+  REPT BIT_PER_COLOR
     ld (hl), d
     inc hl
-    ld (hl), d
-    inc hl
-    ld (hl), d
-    inc hl
-    ld (hl), d
-    inc hl
+  ENDR
+  REPT BIT_PER_COLOR
     ld (hl), e
     inc hl
-    ld (hl), e
-    inc hl
-    ld (hl), e
-    inc hl
-    ld (hl), e
-    inc hl
+  ENDR
     dec a
     jr nz, _write_tile_top_lines
     ; Same for the bottom lines
     ld a, 8
 _write_tile_bottom_lines:
+  REPT BIT_PER_COLOR
     ld (hl), b
     inc hl
-    ld (hl), b
-    inc hl
-    ld (hl), b
-    inc hl
-    ld (hl), b
-    inc hl
+  ENDR
+  REPT BIT_PER_COLOR
     ld (hl), c
     inc hl
-    ld (hl), c
-    inc hl
-    ld (hl), c
-    inc hl
-    ld (hl), c
-    inc hl
+  ENDR
     dec a
     jr nz, _write_tile_bottom_lines
     ret
@@ -236,6 +251,7 @@ screen_get_and_set_pixels:
     rl d
     inc hl
   ENDR
+test_me:
     ; D has the XORed pixels, C has the new pixel
     ld a, d
     ; Get the former value

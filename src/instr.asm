@@ -483,7 +483,7 @@ draw_byte:
     or a
     ; No colision if flag is z here
     jr z, _draw_byte_no_colision
-    inc a
+    ld a, 1
     ld (c_regs + 0xf), a
 _draw_byte_no_colision:
     ; Go to the next line and load the next byte
@@ -718,5 +718,6 @@ c_ram:
     DEFB 0xE0,0x90,0x90,0x90,0xE0
     DEFB 0xF0,0x80,0xF0,0x80,0xF0
     DEFB 0xF0,0x80,0xF0,0x80,0x80
-    DS 4096 - 80 ; 80 is the size of the font
-    ; The screen is 64x32 pixels (1-bit)
+    DS 4096 - 80 ; 80 is the size of the font in bytes
+    PUBLIC c_ram_end
+c_ram_end:
