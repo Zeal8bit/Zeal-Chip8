@@ -206,162 +206,73 @@ vramset:
     ret
 
 
-
-
-    ; Get 8 pixels from the screen located at coordiantes (D, E)
+    ; Get the pixels at the given coordinates and XOR them with the new pixels to set
     ; Parameters:
-    ;   D - X coordinate
-    ;   E - Y coordinate
+    ;   HL - Address of the new pixels
+    ;   D - X coordinate (useless, pixels_addr contains the address to process)
+    ;   E - Y coordinate (useless, pixels_addr contains the address to process)
     ; Returns:
-    ;   A - 8 pixels
-    ; Alters:
-    ;   A
-    PUBLIC screen_get_byte_at
-screen_get_byte_at:
-    push bc
-    push hl
-    ; Calculate the number of pixels to skip to point to the line E.
-    ; One byte represents 1 pixel, so we have to multiply by 64.
-    ; Make sure the Vy coordinate is between 0 and SCREEN_HEIGHT - 1
-    ld a, e
-    and SCREEN_HEIGHT - 1
-    rrca
-    rrca
-    ld h, a
-    and 0xc0
-    ld l, a
-    ld a, h
-    and 7
-    ld h, a
-    ; Add X coordinates, guaranteed no carry
-    ld a, d
-    and SCREEN_WIDTH - 1
-    add l
-    ld l, a
-    ; Make it point to the VRAM
-    ld bc, c_vram
-    add hl, bc
-    ld (pixels_addr), hl
-    ; Dereference HL 8 times
-    ld b, 8
-    ; Store the result in C
-    ld c, 0
-get_byte_loop:
-    ld a, (hl)
-    inc hl
-    rrca
-    rl c
-    djnz get_byte_loop
-    ld a, c
-    pop hl
-    pop bc
-    ret
-
-  IF 0
-    ; Calculate the number of BYTES to skip to point to the line E.
-    ; One byte represents 8 pixels, so we have to multiply by 64/8 = 8.
-    ; Make sure the Vy coordinate is between 0 and SCREEN_HEIGHT - 1
-    ld a, e
-    and SCREEN_HEIGHT - 1
-    ; Multiply A by 8
-    add a
-    add a
-    add a
-    ; Make HL point to that pixels line
-    ld hl, c_vram
-    ADD_HL_A()
-    ; Here, we need to read 2 bytes because the requested pixels could be in-between two bytes!
-    ld a, d
-    and SCREEN_WIDTH - 1
-    ; Divide D by 8, but keep a backup in C
-    ld c, a
-    rrca
-    rrca
-    rrca
-    ; The result is at most 7
-    and 7
-    ; Add this result to HL
-    ADD_HL_A()
-    ld a, c
-    and 7
-    ; Save these data for the next call
-    ld (pixels_addr), hl
-    ld (pixels_shift), a
-    jr z, screen_get_byte_shift_0
-    ; Store the "left" pixels in B
-    ; Store the "right" pixels in C
-    ; Shift B left, shift C right, A times
-    ; OR them to get an 8-bit value
-    ld b, (hl)
-    inc hl
-    ld c, (hl)
-    ; Mask in H
-    ld h, 0xff
-screen_get_byte_shift:
-    ; Shift left B and H
-    sla b
-    ; Shift right C and H
-    srl c
-    srl h
-    dec a
-    jr nz, screen_get_byte_shift
-    ; Remove unused bits
-    ld a, h
-    and c
-    ld c, a
-    ld a, h
-    cpl
-    and b
-    ; Return A OR B
-    or c
-    ; Restore saved registers
-    pop hl
-    pop bc
-    ret
-screen_get_byte_shift_0:
-    ld a, (hl)
-    ; Restore saved registers
-    pop hl
-    pop bc
-    ret
-  ENDIF
-
-    ; Set 8 pixels to the screen located at coordinates set by the function screen_get_byte_at.
-    ; As such, that routine must be called beforehand.
-    ; Parameters:
-    ;   A - 8 pixels to set
-    ; Returns:
-    ;   -
-    ; Alters:
-    ;   A
-    PUBLIC screen_set_byte_at
-screen_set_byte_at:
+    ;   A - Non zero on collision, zero else
+    PUBLIC screen_get_and_set_pixels
+screen_get_and_set_pixels:
     push bc
     push hl
     push de
+    ; Get the new pixel
+    ld b, (hl)
+    ; Get the vram addr
     ld hl, (pixels_addr)
-    ld b, 8
-    ld c, a
-set_byte_loop:
+    ; Put new pixels in C
+    ld c, b
+    ld d, 0
+  REPT 8
     xor a
-    rl c
+    rl b
     rla
+    xor (hl)
     ld (hl), a
+    ; Store this new bit in D
+    rrca
+    rl d
     inc hl
-    djnz set_byte_loop
-    ld hl, (pixels_vram_addr)
-    push hl
-    ; Now that the bitmap is modified, we need to upadte the VRAM
+  ENDR
+    ; D has the XORed pixels, C has the new pixel
+    ld a, d
+    ; Get the former value
+    xor c
+    ; Check if there was a conflict
+    and c
+    ; A is ready to be returned, we need to make HL point to the next pixels
+    ld bc, 64 - 8
+    add hl, bc
+    ld (pixels_addr), hl
+    pop de
+    pop hl
+    pop bc
+    ret
+
+
+    ; Parameters:
+    ;   B - Number of lines of the new sprite
+    ; Returns:
+    ;   -
+    ; Alters:
+    ;   A, BC, DE, HL
+    PUBLIC screen_update_view
+screen_update_view:
     ; We have at most 5 updates to do:
     ;   - 4 if the pixels address is even
     ;   - 5 if the pixels address is odd
-    ld hl, (pixels_addr)
-    ld b, 1
-    bit 6, l
-    jp z, set_byte_bottom_line
-    dec b
-set_byte_bottom_line:
-    ; HL contains the address of the pixels that were modified
+    ld hl, (pixels_addr_backup)
+    ld de, (pixels_vram_addr)
+    ; Make HL always point to the "top" line of tiles.
+    ; One tile line contains 2 CHIP-8 graphics lines.
+    res 6, l
+screen_update_view_loop:
+    push hl
+    push de
+    ; Similarly, make HL always point to the most left pixel of a
+    ; 4x4 CHIP-8 pixel tile
     bit 0, l
     jp z, set_byte_even
     ; Make HL even
@@ -375,17 +286,15 @@ set_byte_even:
     call set_byte_next_pair
     ; Pop original pixels_vram_addr from the stack
     pop hl
-    ; If B is 0, the next call to this function will affect the next line of tile
-    dec b
-    jr z, set_byte_end
+    ; Make the VRAM address go to the next line
     ld a, 80
     ADD_HL_A()
-set_byte_end:
-    ld (pixels_vram_addr), hl
-    ; Update pixels_vram_addr to point to the next line of pixels
-    pop de
+    ex de, hl
+    ; Make the pixel address go to the next line
     pop hl
-    pop bc
+    ld a, 128   ; Skip 2 lines (64 pixels each)
+    ADD_HL_A()
+    djnz screen_update_view_loop
     ret
 
 
@@ -422,6 +331,34 @@ screen_set_byte_tilemap_addr:
     ; Page 2 is mapped to VRAM, set highest bit of HL
     set 7, h
     ld (pixels_vram_addr), hl
+
+    ; Calculate the pixel addr
+    ; Calculate the number of pixels to skip to point to the line E.
+    ; One byte represents 1 pixel, so we have to multiply by 64.
+    ; Make sure the Vy coordinate is between 0 and SCREEN_HEIGHT - 1
+    ld a, e
+    and SCREEN_HEIGHT - 1
+    rrca
+    rrca
+    ld h, a
+    and 0xc0
+    ld l, a
+    ld a, h
+    and 7
+    ld h, a
+    ; Add X coordinates, guaranteed no carry
+    ld a, d
+    and SCREEN_WIDTH - 1
+    add l
+    ld l, a
+    ; New pixels in A
+    ld a, c
+    ; Make it point to the VRAM
+    ld bc, c_vram
+    add hl, bc
+    ld (pixels_addr), hl
+    ld (pixels_addr_backup), hl
+
     pop bc
     pop hl
     ret
@@ -430,7 +367,7 @@ screen_set_byte_tilemap_addr:
     ; Calculate the tile index to show for the pixels pointed by HL
     ; Parameters:
     ;   HL - Address of the pixels to show
-    ;   B - 1 if the pixels are the top part of the tile, 0 else
+    ;   DE - Tilemap address
     ; Returns:
     ;   HL - HL + 2
     ; Alters:
@@ -442,61 +379,33 @@ set_byte_next_pair:
     rlca
     or (hl)
     ld c, a
-    ; If HL's bit 6 is 0, the new pixels are on the top of the tiles (MSB)
-    ; to edit else, they are at the bottom (LSB)
+    ; HL bit 6 is 0 for sure, the new pixels are on the top of the tiles (MSB)
     call set_byte_get_other_line
     ; HL was not altered by the routine above
     inc hl
     ; C contains the final tile value to draw on screen
     ; Each tile will show 2 pixels, so we have a virtual resolution of 32*16 tiles
     ; Update the tile
-    push hl
-    ld hl, (pixels_vram_addr)
-    ld (hl), c
-    inc hl
-    ld (pixels_vram_addr), hl
-    pop hl
+    ld a, c
+    ld (de), a
+    inc de
     ret
-
-
 
     ; Parameters:
     ;   HL - Pointer to the right pixel of the new tile to render
     ;   C - 2 bits of the current line pointed by HL
-    ;   B - 1 if C must be shifted twice, 0 else
 set_byte_get_other_line:
-    ; If B is 1, check the line below the current one
-    push hl
-    ; Toggle HL's bit 6
-    ld a, 1 << 6
-    xor l
-    ld l, a
-    ld e, (hl)
+    ; Set L's bit 6
+    set 6, l
     dec hl
     ld a, (hl)
-    rlca
-    or e
-    ld e, a
-    ; E contains the "other" line's data
-    ; if B is 0, return (E << 2) | C
-    ; else return (C << 2) | E
-    ld a, b
-    or a
-    jr z, other_line_shift_e
-    ; Shift C
-    ld a, c
-    rlca
-    rlca
-    or e
-    jr other_line_end
-other_line_shift_e:
-    ld a, e
-    rlca
-    rlca
-    or c
-other_line_end:
-    ld c, a
-    pop hl
+    rrca
+    rl c
+    inc hl
+    ld a, (hl)
+    rrca
+    rl c
+    res 6, l
     ret
 
 
@@ -511,6 +420,7 @@ screen_clear:
 
 
 pixels_addr:  DS 2
+pixels_addr_backup: DS 2
 pixels_vram_addr: DS 2
 
     SECTION VRAM

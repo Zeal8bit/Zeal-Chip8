@@ -29,6 +29,7 @@ all: $(OUTPUT_DIR) $(BIN)
 
 $(BIN): $(addprefix $(INPUT_DIR)/, $(SRCS))
 	$(ASM) $(ASMFLAGS) -o$@ $^
+	mv $(OUTPUT_DIR)/*TEXT.bin $(OUTPUT_DIR)/$(BIN)
 
 
 $(OUTPUT_DIR):

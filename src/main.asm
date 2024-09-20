@@ -8,6 +8,8 @@
     SECTION TEXT
     ORG 0x4000
 
+    EXTERN keypad_init
+    EXTERN keypad_poll
     EXTERN exec_tick
     EXTERN exec_instruction
     EXTERN screen_clear
@@ -18,16 +20,18 @@
     EXTERN c_ram
 
 _start:
+    call keypad_init
     call screen_init
     call load_rom_in_ram
 
 loop:
-    ld de, 1
-    MSLEEP()
+    call keypad_poll
+    ; ld de, 1
+    ; MSLEEP()
     ; call wait_for_vblank
     call exec_instruction
-    ; call wait_for_no_vblank
     call exec_tick
+    ; call wait_for_no_vblank
     jp loop
     ; End of the program
     ld h, 0

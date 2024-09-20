@@ -18,8 +18,9 @@
     EXTERN keypad_key_wait
     EXTERN screen_clear
     EXTERN screen_get_byte_at
-    EXTERN screen_set_byte_at
+    EXTERN screen_update_view
     EXTERN screen_set_byte_tilemap_addr
+    EXTERN screen_get_and_set_pixels
 
     ; Execute a single tick
     PUBLIC exec_tick
@@ -453,6 +454,7 @@ instruction_c:
     ; ==================================================== ;
 
 instruction_d:
+    out (0x86), a
     ; Get the lowest nibble and store it in B
     ld a, e
     and 0xf
@@ -474,25 +476,24 @@ instruction_d:
     xor a
     ld (c_regs + 0xf), a
     ; Iterate over the B bytes (B*8 pixels)
+    push bc
 draw_byte:
-    ; Get the pixels that is located at (D, E) on screen
-    call screen_get_byte_at
-    ; Return value in A, check if we are going to colide with an existing pixel
-    ld c, a ; Do not alter the pixels
-    and (hl)
+    ; Get the pixels that are located at (D, E) on screen
+    call screen_get_and_set_pixels
+    or a
     ; No colision if flag is z here
     jr z, _draw_byte_no_colision
-    ; Colision, set Vf
-    ld a, 1
+    inc a
     ld (c_regs + 0xf), a
 _draw_byte_no_colision:
-    ld a, c
-    xor (hl)
-    call screen_set_byte_at
     ; Go to the next line and load the next byte
     inc e
     inc hl
     djnz draw_byte
+    pop bc
+    ; We have to re-iterate and update the screen now
+    call screen_update_view
+    out (0x86), a
     ret
 
     ; ==================================================== ;
@@ -511,7 +512,7 @@ instruction_e:
 instruction_e_not_pressed:
     ld a, (hl)
     call keypad_key_pressed
-    ; A is 1 if pressed, if that's the case, skip teh next instruction
+    ; A is 1 if pressed, if that's the case, skip the next instruction
     or a
     ret z
     jp instr_skip_next_pc
